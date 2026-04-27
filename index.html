@@ -730,7 +730,7 @@ padding: 8px;
 <div class="modal-content">
 <div class="close-btn" onclick="closeModal()">✖</div>
 <h3>إدخال ID</h3>
-<input id="userId" placeholder="ادخل ID اللا��ب">
+<input id="userId" placeholder="ادخل ID اللاعب">
 <button onclick="confirmBuy()">تأكيد</button>
 </div>
 </div>
@@ -744,19 +744,38 @@ padding: 8px;
 </div>
 
 <script>
-// ⚙️ إعدادات Supabase
+// ⚙️ إعدادات Supabase - تم تغيير اسم المتغير لتجنب التعارض
 const SUPABASE_URL = "https://zgrzmhdjmgnnelsztita.supabase.co";
 const SUPABASE_KEY = "sb_publishable_00L0F69nuu0LopTPP6XBSg_BIxAHRNs";
 const TELEGRAM_TOKEN = "8631734604:AAF6IpXFZ40ejHmL6drsqGteNiz7XJNTcmo";
 const CHAT_ID = "8044738479";
-const ADMIN_EMAIL = "mhmdshyl826@gmail.com"; // ✅ تم تعيين الإيميل صح
+const ADMIN_EMAIL = "mhmdshyl826@gmail.com";
 
-let supabaseClient;
+let supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ✅ هذه الدالة هي "المحرك" الذي سيمنع بياناتك من الاختفاء
+async function syncData() {
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    if (session) {
+        const user = session.user;
+        // جلب الرصيد والاسم من السيرفر ووضعه في العناصر الموجودة بكودك أصلاً
+        const { data: profile } = await supabaseClient.from('users').select('*').eq('id', user.id).single();
+        if (profile) {
+            if(document.getElementById("balanceText")) 
+                document.getElementById("balanceText").innerText = "الرصيد: $" + (profile.balance || 0).toFixed(2);
+            if(document.getElementById("profileNameDisplay"))
+                document.getElementById("profileNameDisplay").innerText = profile.name || user.email;
+        }
+    }
+}
+
+// ✅ تشغيل المزامنة فور تحميل الصفحة
+window.addEventListener('load', syncData);
 
 // تهيئة Supabase
 async function initSupabase() {
-  supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
   
+  // التحقق من الجلسة الحالية
   const { data: { session } } = await supabaseClient.auth.getSession();
   if (session) {
     localStorage.setItem("currentUser", JSON.stringify({ id: session.user.id, email: session.user.email }));
@@ -764,6 +783,7 @@ async function initSupabase() {
     document.getElementById("home").style.display = "block";
     loadApps();
     updateBalance();
+    syncData();
   }
 }
 
@@ -779,6 +799,7 @@ const CURRENCY_SYMBOLS = {
   bank: "₺"
 };
 
+// أسعار التطبيقات
 const appPrices = {
   "يا أهلا": { 1000: 1.788 },
   "Soul Chill": { 1000: 1.760 },
@@ -802,7 +823,7 @@ const apps=[
 
 let selectedApp="", selectedAmount=0, selectedPrice=0;
 
-// 📝 التسجيل
+// 📝 التسجيل - تم حذف حقل الاسم بناء على طلبك
 async function register(){
   const email = document.getElementById("regEmail").value.trim();
   const password = document.getElementById("regPassword").value.trim();
@@ -833,7 +854,7 @@ async function register(){
     await supabaseClient.from("users").insert([{
       id: data.user.id,
       email: email,
-      name: email.split('@')[0],
+      name: email.split('@')[0], // نستخدم بداية الإيميل كإسم افتراضي
       code: code,
       balance: 0
     }]);
@@ -868,6 +889,7 @@ async function login(){
     document.getElementById("home").style.display="block";
     loadApps();
     updateBalance();
+    syncData();
     alert("✅ أهلا وسهلا!");
   } catch(error) {
     alert("❌ " + error.message);
@@ -957,6 +979,7 @@ async function saveProfileName(){
   
   await supabaseClient.from("users").update({ name: name }).eq("id", user.id);
   document.getElementById('profileNameDisplay').innerText = name;
+  syncData();
 }
 
 async function loadProfile(){
@@ -975,14 +998,10 @@ function getUser(){
   return JSON.parse(localStorage.getItem("currentUser")) || {};
 }
 
-// ✅ تحقق من صلاحيات الأدمن - محسّن
-function isAdmin(){
+async function isAdmin(){
   const user = getUser();
-  const adminStatus = user.email === ADMIN_EMAIL;
-  console.log("🔍 تحقق أدمن: الإيميل الحالي =", user.email);
-  console.log("🔍 إيميل الأدمن =", ADMIN_EMAIL);
-  console.log("🔍 هل هو أدمن؟", adminStatus);
-  return adminStatus;
+  if(!user.email) return false;
+  return user.email === ADMIN_EMAIL;
 }
 
 async function updateBalance(){
@@ -994,19 +1013,12 @@ async function updateBalance(){
     
     if(data){
       document.getElementById("balanceText").innerText = "الرصيد: $" + (data.balance || 0).toFixed(2);
-      
-      // ✅ عرض زر الأدمن إذا ك��ن المستخدم أدمن
-      if(isAdmin()) {
-        console.log("✅ عرض زر الأدمن");
-        document.getElementById("adminLink").style.display = "block";
-      } else {
-        document.getElementById("adminLink").style.display = "none";
-      }
+      if(await isAdmin()) document.getElementById("adminLink").style.display = "block";
     }
     
     loadProfile();
   } catch(error) {
-    console.error("خطأ في تحديث الرصيد:", error);
+    console.error("Error updating balance:", error);
   }
 }
 
@@ -1014,16 +1026,26 @@ async function getBalance(){
   const user = getUser();
   if(!user.id) return 0;
   
-  const { data } = await supabaseClient.from("users").select("balance").eq("id", user.id).single();
-  return data?.balance || 0;
+  try {
+    const { data } = await supabaseClient.from("users").select("balance").eq("id", user.id).single();
+    return data?.balance || 0;
+  } catch(error) {
+    console.error("Error getting balance:", error);
+    return 0;
+  }
 }
 
 async function setBalance(amount){
   const user = getUser();
   if(!user.id) return;
   
-  await supabaseClient.from("users").update({ balance: amount }).eq("id", user.id);
-  updateBalance();
+  try {
+    await supabaseClient.from("users").update({ balance: amount }).eq("id", user.id);
+    updateBalance();
+    syncData();
+  } catch(error) {
+    console.error("Error setting balance:", error);
+  }
 }
 
 function hideAll(){
@@ -1040,16 +1062,15 @@ function hideAll(){
 
 function goHome(){hideAll();document.getElementById("home").style.display="block";}
 
-// ✅ تحسين دالة فتح الأدمن
 async function openAdmin(){
-  if(isAdmin()){
+  if(await isAdmin()){
     hideAll();
     document.getElementById("adminPage").style.display="block";
     updateAdminStats();
   } else {
     const user = getUser();
-    alert("❌ أنت لا تملك صلاحيات الإدمن!\nحسابك: " + user.email);
-    console.log("❌ محاولة دخول غير مصرح: ", user.email);
+    console.log("🔍 Checking admin:", user.email, "vs", ADMIN_EMAIL);
+    alert("❌ أنت لا تملك صلاحيات الإدمن!");
   }
 }
 
@@ -1067,7 +1088,7 @@ async function updateAdminStats(){
     document.getElementById("totalOrders").innerText = orders?.length || 0;
     document.getElementById("totalSales").innerText = totalSales.toFixed(2);
   } catch(error) {
-    console.error("خطأ في الإحصائيات:", error);
+    console.error("Error updating admin stats:", error);
   }
 }
 
@@ -1097,11 +1118,11 @@ async function showAllUsers(){
     document.getElementById("adminDetails").innerHTML=html;
     document.getElementById("adminDetails").style.display="block";
   } catch(error) {
+    console.error("Error showing users:", error);
     alert("❌ خطأ: " + error.message);
   }
 }
 
-// ✅ تحسين دالة إضافة الرصيد
 async function addBalance(userId){
   let amount=parseFloat(document.getElementById("amount_"+userId).value);
   if(!amount||amount<=0){
@@ -1110,21 +1131,22 @@ async function addBalance(userId){
   }
   
   try {
-    const { data, error: selectError } = await supabaseClient.from("users").select("balance").eq("id", userId).single();
-    
-    if(selectError || !data) {
-      throw new Error("المستخدم غير موجود");
+    const { data } = await supabaseClient.from("users").select("balance").eq("id", userId).single();
+    if(!data) {
+      alert("❌ المستخدم غير موجود");
+      return;
     }
     
-    let currentBalance = data.balance || 0;
+    let currentBalance = data?.balance || 0;
     let newBalance = currentBalance + amount;
     
-    const { error: updateError } = await supabaseClient.from("users").update({ balance: newBalance }).eq("id", userId);
+    const { error } = await supabaseClient.from("users").update({ balance: newBalance }).eq("id", userId);
     
-    if(updateError) throw updateError;
+    if(error) throw error;
     
     alert("✅ تم إضافة $"+amount+" للمستخدم!");
     showAllUsers();
+    syncData();
   } catch(error) {
     console.error("Error in addBalance:", error);
     alert("❌ خطأ: " + error.message);
@@ -1140,6 +1162,11 @@ async function subtractBalance(userId){
   
   try {
     const { data } = await supabaseClient.from("users").select("balance").eq("id", userId).single();
+    if(!data) {
+      alert("❌ المستخدم غير موجود");
+      return;
+    }
+    
     let currentBalance = data?.balance || 0;
     
     if(amount>currentBalance){
@@ -1149,10 +1176,15 @@ async function subtractBalance(userId){
     
     let newBalance = currentBalance - amount;
     
-    await supabaseClient.from("users").update({ balance: newBalance }).eq("id", userId);
+    const { error } = await supabaseClient.from("users").update({ balance: newBalance }).eq("id", userId);
+    
+    if(error) throw error;
+    
     alert("✅ تم طرح $"+amount+" من المستخدم!");
     showAllUsers();
+    syncData();
   } catch(error) {
+    console.error("Error in subtractBalance:", error);
     alert("❌ خطأ: " + error.message);
   }
 }
@@ -1173,6 +1205,7 @@ async function showAllOrders(){
     document.getElementById("adminDetails").innerHTML=html;
     document.getElementById("adminDetails").style.display="block";
   } catch(error) {
+    console.error("Error showing orders:", error);
     alert("❌ خطأ: " + error.message);
   }
 }
@@ -1198,6 +1231,7 @@ async function showAllPayments(){
     document.getElementById("adminDetails").innerHTML=html;
     document.getElementById("adminDetails").style.display="block";
   } catch(error) {
+    console.error("Error showing payments:", error);
     alert("❌ خطأ: " + error.message);
   }
 }
@@ -1216,8 +1250,10 @@ async function approvePayment(paymentId){
       
       alert("✅ تمت الموافقة على الدفعة!");
       showAllPayments();
+      syncData();
     }
   } catch(error) {
+    console.error("Error approving payment:", error);
     alert("❌ خطأ: " + error.message);
   }
 }
@@ -1228,6 +1264,7 @@ async function rejectPayment(paymentId){
     alert("❌ تم رفض الدفعة!");
     showAllPayments();
   } catch(error) {
+    console.error("Error rejecting payment:", error);
     alert("❌ خطأ: " + error.message);
   }
 }
@@ -1238,6 +1275,7 @@ async function completeOrder(orderId){
     alert("✅ تم تنفيذ الطلب!");
     showAllOrders();
   } catch(error) {
+    console.error("Error completing order:", error);
     alert("❌ خطأ: " + error.message);
   }
 }
@@ -1249,6 +1287,7 @@ async function deleteUser(userId){
       alert("✅ تم الحذف!");
       showAllUsers();
     } catch(error) {
+      console.error("Error deleting user:", error);
       alert("❌ خطأ: " + error.message);
     }
   }
@@ -1324,23 +1363,28 @@ async function buyApp(){
     return;
   }
   
-  let balance = await getBalance();
-  if(balance < price){
-    alert("❌ رصيدك لا يكفي");
-    return;
+  try {
+    let balance = await getBalance();
+    if(balance < price){
+      alert("❌ رصيدك لا يكفي");
+      return;
+    }
+    
+    let newBalance = balance - price;
+    await setBalance(newBalance);
+    
+    const user = getUser();
+    await saveOrder(selectedApp, amount, price, userId);
+    
+    sendToTelegram("🛒 طلب شراء جديد\n👤 الإيميل: "+(user.email||"غير معروف")+"\n🆔 ID: "+userId+"\n📱 التطبيق: "+selectedApp+"\n💎 الكمية: "+amount+"\n💰 السعر: $"+price.toFixed(2)+"\n📅 التاريخ: "+new Date().toLocaleDateString('ar-EG'));
+    
+    alert("✅ تم تأكيد الطلب!");
+    syncData();
+    goHome();
+  } catch(error) {
+    console.error("Error buying app:", error);
+    alert("❌ خطأ: " + error.message);
   }
-  
-  let newBalance = balance - price;
-  await setBalance(newBalance);
-  
-  const user = getUser();
-  await saveOrder(selectedApp, amount, price, userId);
-  
-  // ✅ تحسين إرسال التليجرام
-  sendToTelegram("🛒 طلب شراء جديد\n👤 الإيميل: "+(user.email||"غير معروف")+"\n🆔 ID: "+userId+"\n📱 التطبيق: "+selectedApp+"\n💎 الكمية: "+amount+"\n💰 السعر: $"+price.toFixed(2)+"\n📅 التاريخ: "+new Date().toLocaleDateString('ar-EG'));
-  
-  alert("✅ تم تأكيد الطلب!");
-  goHome();
 }
 
 async function sendFormWithImage(type){
@@ -1379,19 +1423,21 @@ async function sendFormWithImage(type){
   let reader = new FileReader();
   
   reader.onload = async function(e){
-    const user = getUser();
-    const username = user.email || "غير معروف";
-    
-    await savePayment(user.id, username, method, amount, currencyType, type);
-    
-    // ✅ إرسال إشعار التليجرام
-    sendToTelegram("💳 دفعة جديدة\n👤 الإيميل: "+username+"\n💰 الطريقة: "+method+"\n📊 المبلغ: "+amount+" "+currencyType+"\n📅 التاريخ: "+new Date().toLocaleDateString('ar-EG'));
-    
-    amountInput.value = "";
-    imageInput.value = "";
-    document.getElementById(type + "ImagePreview").innerText = "";
-    
-    document.getElementById("successPopup").style.display = "flex";
+    try {
+      const user = getUser();
+      const username = user.email || "غير معروف";
+      
+      await savePayment(user.id, username, method, amount, currencyType, type);
+      
+      amountInput.value = "";
+      imageInput.value = "";
+      document.getElementById(type + "ImagePreview").innerText = "";
+      
+      document.getElementById("successPopup").style.display = "flex";
+    } catch(error) {
+      console.error("Error in sendFormWithImage:", error);
+      alert("❌ خطأ: " + error.message);
+    }
   };
   
   reader.readAsDataURL(file);
@@ -1411,7 +1457,8 @@ async function savePayment(userId, email, method, amount, currencyType, type){
       status: "pending"
     }]);
   } catch(error) {
-    console.error("خطأ في حفظ الدفعة:", error);
+    console.error("Error saving payment:", error);
+    throw error;
   }
 }
 
@@ -1424,10 +1471,10 @@ function closeModal(){
 }
 
 async function saveOrder(app, amount, price, gameId){
-  const user = getUser();
-  if(!user.id) return;
-  
   try {
+    const user = getUser();
+    if(!user.id) return;
+    
     await supabaseClient.from("orders").insert([{
       user_id: user.id,
       user_email: user.email,
@@ -1438,18 +1485,19 @@ async function saveOrder(app, amount, price, gameId){
       completed: false
     }]);
   } catch(error) {
-    console.error("خطأ في حفظ الطلب:", error);
+    console.error("Error saving order:", error);
+    throw error;
   }
 }
 
 async function loadOrders(){
-  const user = getUser();
-  if(!user.id){
-    document.getElementById("ordersList").innerHTML='<div style="text-align:center;padding:40px;"><p style="font-size:18px;">❌ لا يوجد مستخدم</p></div>';
-    return;
-  }
-  
   try {
+    const user = getUser();
+    if(!user.id){
+      document.getElementById("ordersList").innerHTML='<div style="text-align:center;padding:40px;"><p style="font-size:18px;">❌ لا يوجد مستخدم</p></div>';
+      return;
+    }
+    
     const { data: orders } = await supabaseClient.from("orders").select("*").eq("user_id", user.id);
     
     let html='<h3>طلباتي</h3>';
@@ -1460,24 +1508,24 @@ async function loadOrders(){
       orders.forEach(o=>{
         let statusText=o.completed?"✅ تم التنفيذ":"⏳ قيد الانتظار";
         let statusClass=o.completed?"completed":"";
-        html+=`<div class="order-item ${statusClass}"><h3>${o.app}</h3><p><strong>��لكمية:</strong> ${o.amount} 💎</p><p><strong>السعر:</strong> $${o.price}</p><p><strong>📅 التاريخ:</strong> ${new Date(o.created_at).toLocaleDateString('ar-EG')}</p><p><strong>⏰ الوقت:</strong> ${new Date(o.created_at).toLocaleTimeString('ar-EG')}</p><div class="status ${o.completed?"completed":"pending"}"><strong>${statusText}</strong></div></div>`;
+        html+=`<div class="order-item ${statusClass}"><h3>${o.app}</h3><p><strong>الكمية:</strong> ${o.amount} 💎</p><p><strong>السعر:</strong> $${o.price}</p><p><strong>📅 التاريخ:</strong> ${new Date(o.created_at).toLocaleDateString('ar-EG')}</p><p><strong>⏰ الوقت:</strong> ${new Date(o.created_at).toLocaleTimeString('ar-EG')}</p><div class="status ${o.completed?"completed":"pending"}"><strong>${statusText}</strong></div></div>`;
       });
     }
     
     document.getElementById("ordersList").innerHTML=html;
   } catch(error) {
-    console.error("خطأ في تحميل الطلبات:", error);
+    console.error("Error loading orders:", error);
   }
 }
 
 async function loadPayments(){
-  const user = getUser();
-  if(!user.id){
-    document.getElementById("paymentsList").innerHTML='<div style="text-align:center;padding:40px;"><p style="font-size:18px;">❌ لا يوجد مستخدم</p></div>';
-    return;
-  }
-  
   try {
+    const user = getUser();
+    if(!user.id){
+      document.getElementById("paymentsList").innerHTML='<div style="text-align:center;padding:40px;"><p style="font-size:18px;">❌ لا يوجد مستخدم</p></div>';
+      return;
+    }
+    
     const { data: payments } = await supabaseClient.from("payments").select("*").eq("user_id", user.id).order("created_at", { ascending: false });
     
     let html='<h3>دفعاتي</h3>';
@@ -1494,15 +1542,14 @@ async function loadPayments(){
     
     document.getElementById("paymentsList").innerHTML=html;
   } catch(error) {
-    console.error("خطأ في تحميل الدفعات:", error);
+    console.error("Error loading payments:", error);
   }
 }
 
-// ✅ تحسين دالة إرسال التليجرام
 function sendToTelegram(text){
   const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
   
-  console.log("📤 جاري إرسال رسالة للتليجرام...");
+  console.log("📤 جاري الإرسال للتليجرام...");
   
   fetch(url, {
     method: "POST",
@@ -1512,7 +1559,7 @@ function sendToTelegram(text){
       text: text
     })
   })
-  .then(response => response.json())
+  .then(r => r.json())
   .then(data => {
     if(data.ok) {
       console.log("✅ تم إرسال الرسالة للتليجرام بنجاح");
@@ -1558,6 +1605,7 @@ setInterval(() => {
   if(paymentsPage && paymentsPage.style.display!=="none"){
     loadPayments();
   }
+  syncData();
 }, 30000);
 </script>
 
